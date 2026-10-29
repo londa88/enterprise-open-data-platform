@@ -1,6 +1,7 @@
 """
-Lecture 7-8: REST API client — Open-Meteo (ამინდის პროგნოზი).
-Lecture 8: დაემატა ზოგადი fetch(lat, lon, label) — რამდენიმე ქალაქისთვის.
+Lecture 7-9: REST API client — Open-Meteo (ამინდის პროგნოზი).
+Lecture 8: ზოგადი fetch(lat, lon, label).
+Lecture 9: retry (exponential backoff) _get()-ზე.
 """
 import logging
 from typing import Any, Optional
@@ -8,6 +9,7 @@ from typing import Any, Optional
 import requests
 
 from .config import WeatherConfig, load_weather_config
+from .retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,12 @@ class WeatherClient:
     def __init__(self, config: Optional[WeatherConfig] = None) -> None:
         self.config = config or load_weather_config()
 
+    @retry_with_backoff((requests.exceptions.RequestException,), max_attempts=3)
+    def _get(self, params: dict) -> requests.Response:
+        response = requests.get(BASE_URL, params=params, timeout=self.config.timeout_seconds)
+        response.raise_for_status()
+        return response
+
     def fetch(self, latitude: float, longitude: float, label: str = "") -> dict[str, Any]:
         params = {
             "latitude": latitude,
@@ -33,13 +41,12 @@ class WeatherClient:
                     label or "?", latitude, longitude)
 
         try:
-            response = requests.get(BASE_URL, params=params, timeout=self.config.timeout_seconds)
-            response.raise_for_status()
+            response = self._get(params)
         except requests.exceptions.Timeout as exc:
             logger.error("[%s] Timeout Open-Meteo API-სთან დაკავშირებისას", label)
             raise WeatherAPIError(f"[{label}] API timeout-ით ჩავარდა") from exc
         except requests.exceptions.RequestException as exc:
-            logger.error("[%s] Open-Meteo API-მ დააბრუნა შეცდომა: %s", label, exc)
+            logger.error("[%s] Open-Meteo API საბოლოოდ ჩავარდა: %s", label, exc)
             raise WeatherAPIError(f"[{label}] API request ჩავარდა: {exc}") from exc
 
         data = response.json()
